@@ -1,0 +1,209 @@
+export type UserRole = 'OWNER' | 'STAFF';
+export type PartyType = 'CUSTOMER' | 'SUPPLIER' | 'BOTH';
+export type WorkType = 'POLISH' | 'MEENA';
+export type PayMode = 'CASH' | 'BANK';
+export type BillStatus = 'OPEN' | 'PARTIAL' | 'PAID';
+
+export interface User {
+  id: string;
+  name: string;
+  username: string;
+  role: UserRole;
+  is_active: boolean;
+  last_login_at?: string;
+  created_at: string;
+}
+
+export interface Party {
+  id: string;
+  name: string;
+  type: PartyType;
+  whatsapp_number?: string;
+  address?: string;
+  opening_balance: number;
+  current_balance?: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface Item {
+  id: string;
+  name: string;
+  category?: string;
+  stock_pieces: number;
+  stock_kg: number;
+  is_active: boolean;
+}
+
+export interface BankAccount {
+  id: string;
+  name: string;
+  opening_balance: number;
+  current_balance?: number;
+  is_active: boolean;
+}
+
+export interface SaleLine {
+  id?: string;
+  item_id: string;
+  item_name?: string;
+  pieces: number;
+  weight_kg: number;
+  rate: number;
+  amount: number;
+}
+
+export interface Sale {
+  id: string;
+  bill_no: number;
+  party_id: string;
+  party_name?: string;
+  party_phone?: string;
+  entry_at: string;
+  due_date: string;
+  total_amount: number;
+  allocated_amount?: number;
+  outstanding_amount?: number;
+  status: BillStatus;
+  notes?: string;
+  created_by: string;
+  creator_name?: string;
+  lines?: SaleLine[];
+}
+
+export interface PurchaseLine {
+  id?: string;
+  item_id: string;
+  item_name?: string;
+  pieces: number;
+  weight_kg: number;
+  rate: number;
+  amount: number;
+}
+
+export interface Purchase {
+  id: string;
+  bill_no: number;
+  party_id: string;
+  party_name?: string;
+  party_phone?: string;
+  entry_at: string;
+  due_date?: string;
+  total_amount: number;
+  status: BillStatus;
+  notes?: string;
+  created_by: string;
+  creator_name?: string;
+  lines?: PurchaseLine[];
+}
+
+export interface JobWorkEntry {
+  id: string;
+  work_type: WorkType;
+  party_id: string;
+  party_name?: string;
+  item_id: string;
+  item_name?: string;
+  direction: 'ISSUE' | 'RECEIVE';
+  weight_kg: number;
+  charge_amount?: number;
+  entry_at: string;
+  notes?: string;
+  created_by: string;
+  creator_name?: string;
+}
+
+export interface VoucherAllocation {
+  id?: string;
+  sale_id?: string;
+  purchase_id?: string;
+  amount: number;
+}
+
+export interface MoneyVoucher {
+  id: string;
+  voucher_no: number;
+  kind: 'RECEIPT' | 'PAYMENT';
+  party_id: string;
+  party_name?: string;
+  mode: PayMode;
+  bank_account_id?: string;
+  bank_name?: string;
+  amount: number;
+  reference_no?: string;
+  entry_at: string;
+  created_by: string;
+  creator_name?: string;
+  allocations?: VoucherAllocation[];
+}
+
+export interface LedgerRow {
+  id: number;
+  entry_at: string;
+  source_type: string;
+  source_id: string;
+  debit: number;
+  credit: number;
+  running_balance: number;
+}
+
+export interface StockRow {
+  id: number;
+  entry_at: string;
+  source_type: string;
+  source_id: string;
+  pieces_delta: number;
+  kg_delta: number;
+}
+
+export interface ReminderSettings {
+  id: number;
+  repeat_days: number;
+  send_time: string;
+  owner_whatsapp: string;
+  is_active: boolean;
+}
+
+export interface AuditLogRow {
+  id: number;
+  actor_id: string;
+  actor_name?: string;
+  action: string;
+  table_name: string;
+  record_id: string;
+  before_data?: any;
+  after_data?: any;
+  at: string;
+}
+
+export interface DashboardStats {
+  totalReceivable: number;
+  totalPayable: number;
+  overdueAmount: number;
+  overdueCount: number;
+  todaySales: number;
+  todayPurchases: number;
+  cashBalance: number;
+  bankBalance: number;
+  topCustomersByDues: Array<{
+    id: string;
+    customer_name: string;
+    pending_amount: number;
+    whatsapp_number?: string;
+  }>;
+  lowStockItems: Array<{
+    id: string;
+    name: string;
+    category?: string;
+    pieces: number;
+    weight_kg: number;
+  }>;
+  recentEntries: Array<{
+    id: string;
+    type: string;
+    party_name: string;
+    amount: number;
+    entry_at: string;
+    creator_name: string;
+  }>;
+}
