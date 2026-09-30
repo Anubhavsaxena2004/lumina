@@ -1,6 +1,6 @@
-import { Controller, Get, Post, Body, Query } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
-import { PurchasesService, CreatePurchaseDto } from './purchases.service';
+import { PurchasesService, CreatePurchaseDto, UpdatePurchaseDto } from './purchases.service';
 import { Roles, CurrentUser } from '../common/decorators';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 
@@ -20,6 +20,13 @@ export class PurchasesController {
     return this.purchasesService.findAll(user, Number(limit), Number(offset));
   }
 
+  @Get(':id')
+  @Roles('OWNER', 'STAFF')
+  @ApiOperation({ summary: 'Get single purchase entry with lines' })
+  findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.purchasesService.findOne(id, user);
+  }
+
   @Post()
   @Roles('OWNER', 'STAFF')
   @ApiOperation({ summary: 'Create new purchase entry (adds stock & ledger credit)' })
@@ -28,5 +35,23 @@ export class PurchasesController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.purchasesService.create(dto, user);
+  }
+
+  @Patch(':id')
+  @Roles('OWNER')
+  @ApiOperation({ summary: 'Edit purchase with reversing rows and audit log (Owner only)' })
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdatePurchaseDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.purchasesService.update(id, dto, user);
+  }
+
+  @Delete(':id')
+  @Roles('OWNER')
+  @ApiOperation({ summary: 'Soft-delete purchase entry with reversing rows (Owner only)' })
+  remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.purchasesService.softDelete(id, user);
   }
 }

@@ -25,7 +25,8 @@ describe('Auth, RBAC, and Staff Isolation Tests', () => {
 
     jwtStrategy = new JwtStrategy(mockDbService as DatabaseService);
     sanitizeInterceptor = new SanitizeInputInterceptor();
-    salesService = new SalesService(mockDbService as DatabaseService);
+    const mockEventEmitter = { emitEntrySaved: jest.fn() } as any;
+    salesService = new SalesService(mockDbService as DatabaseService, mockEventEmitter);
   });
 
   const createMockContext = (user: any, requiredRoles?: string[], isPublic = false): ExecutionContext => {

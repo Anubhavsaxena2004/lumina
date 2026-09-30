@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Delete,
   Param,
   Body,
@@ -42,6 +43,17 @@ export class SalesController {
   @ApiOperation({ summary: 'Create new sale with stock deduction and ledger debit' })
   create(@Body() dto: CreateSaleDto, @CurrentUser() user: AuthUser) {
     return this.salesService.create(dto, user);
+  }
+
+  @Patch(':id')
+  @Roles('OWNER')
+  @ApiOperation({ summary: 'Edit sale with reversing rows and audit log (Owner only)' })
+  update(
+    @Param('id') id: string,
+    @Body() dto: any,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.salesService.update(id, dto, user);
   }
 
   @Delete(':id')
