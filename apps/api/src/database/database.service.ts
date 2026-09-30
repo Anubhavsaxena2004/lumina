@@ -71,4 +71,48 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       client.release();
     }
   }
+
+  /**
+   * Executes a query with PostgreSQL session settings for RLS:
+   * app.current_user_id and app.current_role
+   */
+  async queryWithContext<T extends QueryResultRow = any>(
+    userId: string,
+    role: 'OWNER' | 'STAFF',
+    text: string,
+    params?: any[],
+  ): Promise<QueryResult<T>> {
+    const client = await this.getClient();
+    try {
+      await client.query(`SET LOCAL app.current_user_id = '${userId}'`);
+      await client.query(`SET LOCAL app.current_role = '${role}'`);
+      return await client.query<T>(text, params);
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Executes a transactional callback with PostgreSQL session settings for RLS
+   */
+  async withContextTransaction<T>(
+    userId: string,
+    role: 'OWNER' | 'STAFF',
+    callback: (client: PoolClient) => Promise<T>,
+  ): Promise<T> {
+    const client = await this.getClient();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SET LOCAL app.current_user_id = '${userId}'`);
+      await client.query(`SET LOCAL app.current_role = '${role}'`);
+      const result = await callback(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 }

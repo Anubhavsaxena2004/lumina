@@ -324,3 +324,50 @@ ON CONFLICT DO NOTHING;
 INSERT INTO reminder_settings (id, repeat_days, send_time, owner_whatsapp, is_active)
 VALUES (1, 3, '10:00', '+919690000000', true)
 ON CONFLICT (id) DO NOTHING;
+
+-- ==========================================
+-- PostgreSQL Row-Level Security (RLS) Policies
+-- Enforces DB-level isolation for staff entries
+-- ==========================================
+
+ALTER TABLE sales ENABLE ROW LEVEL SECURITY;
+ALTER TABLE purchases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE job_work_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE money_vouchers ENABLE ROW LEVEL SECURITY;
+
+-- 1. Sales RLS Policy
+DROP POLICY IF EXISTS sales_staff_isolation_policy ON sales;
+CREATE POLICY sales_staff_isolation_policy ON sales
+    FOR ALL
+    USING (
+        current_setting('app.current_role', true) = 'OWNER' 
+        OR created_by = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    );
+
+-- 2. Purchases RLS Policy
+DROP POLICY IF EXISTS purchases_staff_isolation_policy ON purchases;
+CREATE POLICY purchases_staff_isolation_policy ON purchases
+    FOR ALL
+    USING (
+        current_setting('app.current_role', true) = 'OWNER' 
+        OR created_by = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    );
+
+-- 3. Job Work RLS Policy
+DROP POLICY IF EXISTS job_work_staff_isolation_policy ON job_work_entries;
+CREATE POLICY job_work_staff_isolation_policy ON job_work_entries
+    FOR ALL
+    USING (
+        current_setting('app.current_role', true) = 'OWNER' 
+        OR created_by = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    );
+
+-- 4. Money Vouchers RLS Policy
+DROP POLICY IF EXISTS vouchers_staff_isolation_policy ON money_vouchers;
+CREATE POLICY vouchers_staff_isolation_policy ON money_vouchers
+    FOR ALL
+    USING (
+        current_setting('app.current_role', true) = 'OWNER' 
+        OR created_by = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    );
+
