@@ -33,15 +33,22 @@ export const AppShell: React.FC = () => {
 
   const isOwner = role === 'OWNER';
 
+  interface NavItem {
+    to: string;
+    label: string;
+    icon: React.ReactNode;
+    end?: boolean;
+  }
+
   // Navigation Items
-  const staffNav = [
+  const staffNav: NavItem[] = [
     { to: '/', label: 'Quick Entry', icon: <PlusCircle className="h-5 w-5" />, end: true },
     { to: '/staff/entries', label: 'My Entries', icon: <FileText className="h-5 w-5" /> },
     { to: '/sales/new', label: 'New Sale', icon: <ShoppingBag className="h-5 w-5" /> },
     { to: '/vouchers/new', label: 'Voucher', icon: <CreditCard className="h-5 w-5" /> },
   ];
 
-  const ownerNav = [
+  const ownerNav: NavItem[] = [
     { to: '/owner/dashboard', label: 'Dashboard', icon: <LayoutDashboard className="h-5 w-5" /> },
     { to: '/owner/entries', label: 'All Entries', icon: <FileText className="h-5 w-5" /> },
     { to: '/owner/ledger', label: 'Party Ledger', icon: <BookOpen className="h-5 w-5" /> },
