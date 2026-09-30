@@ -1,0 +1,38 @@
+# Multi-stage Dockerfile for NestJS API and Worker
+FROM node:20-alpine AS base
+
+# Install Chromium dependencies for Puppeteer JPG bill rendering
+RUN apk add --no-cache \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont
+
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
+WORKDIR /usr/src/app
+
+FROM base AS development
+COPY apps/api/package*.json ./
+RUN npm install
+COPY apps/api/ ./
+CMD ["npm", "run", "start:dev"]
+
+FROM base AS builder
+COPY apps/api/package*.json ./
+RUN npm ci
+COPY apps/api/ ./
+RUN npm run build
+
+FROM base AS production
+ENV NODE_ENV=production
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+COPY apps/api/package*.json ./
+RUN npm ci --only=production
+COPY --from=builder /usr/src/app/dist ./dist
+USER appuser
+EXPOSE 4000
+CMD ["node", "dist/main.js"]

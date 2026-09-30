@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+      target: development
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ../apps/api:/usr/src/app/apps/api
+      - /usr/src/app/apps/api/node_modules
+    command: ["npm", "run", "start:dev"]
+
+  web:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.web
+      target: development
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ../:/usr/src/app
+      - /usr/src/app/node_modules
+      - /usr/src/app/.next
+    command: ["pnpm", "run", "dev"]
