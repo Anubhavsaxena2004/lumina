@@ -138,6 +138,10 @@ export class BillRendererService {
   }
 
   async renderBillToJpg(sale: any): Promise<Buffer> {
+    if (process.env.NODE_ENV === 'test' && !process.env.PUPPETEER_EXECUTABLE_PATH) {
+      return this.renderSharpFallback(sale);
+    }
+
     const html = this.generateHtmlTemplate(sale);
 
     try {
@@ -146,6 +150,7 @@ export class BillRendererService {
         headless: 'new',
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+        timeout: 3000,
       });
 
       const page = await browser.newPage();
@@ -160,35 +165,39 @@ export class BillRendererService {
       return await sharp(rawBuffer).jpeg({ quality: 85, mozjpeg: true }).toBuffer();
     } catch (err: any) {
       this.logger.warn(`Puppeteer browser launch failed (${err.message}). Using sharp card fallback.`);
-
-      const sharp = require('sharp');
-      const linesList = (sale.lines || [])
-        .map((l: any, i: number) => {
-          const y = 280 + i * 35;
-          return `<text x="50" y="${y}" font-family="Arial, sans-serif" font-size="14" fill="#2B2B2B">${l.item_name} - ${l.pieces} pcs / ${parseFloat(l.weight_kg).toFixed(3)} Kg: ₹${parseFloat(l.amount).toLocaleString('en-IN')}</text>`;
-        })
-        .join('');
-
-      const svg = `
-        <svg width="800" height="900" xmlns="http://www.w3.org/2000/svg">
-          <rect width="100%" height="100%" fill="#FBF7F2"/>
-          <rect x="20" y="20" width="760" height="860" rx="16" fill="#FFFFFF" stroke="#EFEAE3" stroke-width="2"/>
-          <text x="50" y="80" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#9B1C31">KUMKUM PAYAL</text>
-          <text x="50" y="105" font-family="Arial, sans-serif" font-size="14" fill="#B8893B">INVOICE #${sale.bill_no}</text>
-          <line x1="50" y1="125" x2="750" y2="125" stroke="#9B1C31" stroke-width="2"/>
-          <text x="50" y="160" font-family="Arial, sans-serif" font-size="16" fill="#2B2B2B">Billed to: ${sale.party_name}</text>
-          <text x="50" y="190" font-family="Arial, sans-serif" font-size="14" fill="#7A7268">Phone: ${sale.party_phone || 'N/A'}</text>
-          <text x="50" y="220" font-family="Arial, sans-serif" font-size="14" fill="#7A7268">Due Date: ${sale.due_date}</text>
-          <line x1="50" y1="240" x2="750" y2="240" stroke="#EFEAE3" stroke-width="1"/>
-          ${linesList}
-          <line x1="50" y1="760" x2="750" y2="760" stroke="#EFEAE3" stroke-width="2"/>
-          <text x="50" y="800" font-family="Arial, sans-serif" font-size="22" font-weight="bold" fill="#9B1C31">Total Payable: ₹${parseFloat(sale.total_amount).toLocaleString('en-IN')}</text>
-          <text x="50" y="840" font-family="Arial, sans-serif" font-size="12" fill="#7A7268">Date and time are recorded automatically by the server.</text>
-        </svg>
-      `;
-      return await sharp(Buffer.from(svg)).jpeg({ quality: 85, mozjpeg: true }).toBuffer();
+      return this.renderSharpFallback(sale);
     }
   }
+
+  renderSharpFallback(sale: any): Promise<Buffer> {
+    const sharp = require('sharp');
+    const linesList = (sale.lines || [])
+      .map((l: any, i: number) => {
+        const y = 280 + i * 35;
+        return `<text x="50" y="${y}" font-family="Arial, sans-serif" font-size="14" fill="#2B2B2B">${l.item_name} - ${l.pieces} pcs / ${parseFloat(l.weight_kg).toFixed(3)} Kg: ₹${parseFloat(l.amount).toLocaleString('en-IN')}</text>`;
+      })
+      .join('');
+
+    const svg = `
+      <svg width="800" height="900" xmlns="http://www.w3.org/2000/svg">
+        <rect width="100%" height="100%" fill="#FBF7F2"/>
+        <rect x="20" y="20" width="760" height="860" rx="16" fill="#FFFFFF" stroke="#EFEAE3" stroke-width="2"/>
+        <text x="50" y="80" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#9B1C31">KUMKUM PAYAL</text>
+        <text x="50" y="105" font-family="Arial, sans-serif" font-size="14" fill="#B8893B">INVOICE #${sale.bill_no}</text>
+        <line x1="50" y1="125" x2="750" y2="125" stroke="#9B1C31" stroke-width="2"/>
+        <text x="50" y="160" font-family="Arial, sans-serif" font-size="16" fill="#2B2B2B">Billed to: ${sale.party_name}</text>
+        <text x="50" y="190" font-family="Arial, sans-serif" font-size="14" fill="#7A7268">Phone: ${sale.party_phone || 'N/A'}</text>
+        <text x="50" y="220" font-family="Arial, sans-serif" font-size="14" fill="#7A7268">Due Date: ${sale.due_date}</text>
+        <line x1="50" y1="240" x2="750" y2="240" stroke="#EFEAE3" stroke-width="1"/>
+        ${linesList}
+        <line x1="50" y1="760" x2="750" y2="760" stroke="#EFEAE3" stroke-width="2"/>
+        <text x="50" y="800" font-family="Arial, sans-serif" font-size="22" font-weight="bold" fill="#9B1C31">Total Payable: ₹${parseFloat(sale.total_amount).toLocaleString('en-IN')}</text>
+        <text x="50" y="840" font-family="Arial, sans-serif" font-size="12" fill="#7A7268">Date and time are recorded automatically by the server.</text>
+      </svg>
+    `;
+    return sharp(Buffer.from(svg)).jpeg({ quality: 85, mozjpeg: true }).toBuffer();
+  }
+
 
   async saveAndRecordBill(sale: any, messageId?: number): Promise<{ filePath: string; fileName: string; billImageId: string }> {
     const buffer = await this.renderBillToJpg(sale);

@@ -184,7 +184,7 @@ export class WhatsAppQueueService implements OnModuleInit, OnModuleDestroy {
           `UPDATE whatsapp_messages SET attempts = $1 WHERE id = $2`,
           [attempt, messageRecordId],
         );
-        if (attempt < 3) {
+        if (attempt < 3 && process.env.NODE_ENV !== 'test') {
           // Exponential backoff delay
           await new Promise((resolve) => setTimeout(resolve, Math.pow(2, attempt) * 1000));
         }
