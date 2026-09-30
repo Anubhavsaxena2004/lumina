@@ -18,10 +18,12 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { HealthController } from './health/health.controller';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
+import { CommonModule } from './common/common.module';
 import { SanitizeInputInterceptor } from './common/interceptors/sanitize-input.interceptor';
 
 @Module({
   imports: [
+    CommonModule,
     DatabaseModule,
     AuthModule,
     UsersModule,
