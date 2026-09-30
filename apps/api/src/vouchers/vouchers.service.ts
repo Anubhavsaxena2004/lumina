@@ -5,14 +5,26 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
-import { CreateVoucherDto } from './vouchers.dto';
+import { CreateVoucherDto, UpdateVoucherDto } from './vouchers.dto';
 import { AuthUser } from '../common/decorators/current-user.decorator';
+import { DomainEventEmitter } from '../common/events/domain-event.emitter';
+import { EntrySavedEvent } from '../common/events/entry-saved.event';
 
 @Injectable()
 export class VouchersService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly eventEmitter: DomainEventEmitter,
+  ) {}
 
-  async findAll(user: AuthUser, limit = 50, offset = 0) {
+  async findAll(
+    user: AuthUser,
+    partyId?: string,
+    kind?: string,
+    mode?: string,
+    limit = 50,
+    offset = 0,
+  ) {
     const conditions: string[] = ['mv.is_deleted = false'];
     const params: any[] = [];
     let idx = 1;
@@ -22,11 +34,42 @@ export class VouchersService {
       params.push(user.id);
     }
 
+    if (partyId) {
+      conditions.push(`mv.party_id = $${idx++}`);
+      params.push(partyId);
+    }
+
+    if (kind) {
+      conditions.push(`mv.kind = $${idx++}`);
+      params.push(kind);
+    }
+
+    if (mode) {
+      conditions.push(`mv.mode = $${idx++}`);
+      params.push(mode);
+    }
+
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     params.push(limit, offset);
 
     const query = `
-      SELECT mv.*, p.name AS party_name, b.name AS bank_name, u.name AS creator_name
+      SELECT mv.*, p.name AS party_name, p.whatsapp_number AS party_whatsapp,
+             b.name AS bank_name, u.name AS creator_name,
+             COALESCE(
+               (SELECT JSON_AGG(JSON_BUILD_OBJECT(
+                 'id', va.id,
+                 'sale_id', va.sale_id,
+                 'purchase_id', va.purchase_id,
+                 'amount', va.amount,
+                 'sale_bill_no', s.bill_no,
+                 'purchase_bill_no', pu.bill_no
+               ))
+               FROM voucher_allocations va
+               LEFT JOIN sales s ON s.id = va.sale_id
+               LEFT JOIN purchases pu ON pu.id = va.purchase_id
+               WHERE va.voucher_id = mv.id),
+               '[]'::json
+             ) AS allocations
       FROM money_vouchers mv
       JOIN parties p ON p.id = mv.party_id
       LEFT JOIN bank_accounts b ON b.id = mv.bank_account_id
@@ -40,13 +83,76 @@ export class VouchersService {
     return res.rows;
   }
 
-  async create(dto: CreateVoucherDto, user: AuthUser) {
-    if (dto.mode === 'BANK' && !dto.bank_account_id) {
-      throw new BadRequestException('A bank account is required when payment mode is BANK');
+  async findOne(id: string, user: AuthUser) {
+    const query = `
+      SELECT mv.*, p.name AS party_name, p.whatsapp_number AS party_whatsapp,
+             b.name AS bank_name, u.name AS creator_name,
+             COALESCE(
+               (SELECT JSON_AGG(JSON_BUILD_OBJECT(
+                 'id', va.id,
+                 'sale_id', va.sale_id,
+                 'purchase_id', va.purchase_id,
+                 'amount', va.amount,
+                 'sale_bill_no', s.bill_no,
+                 'sale_total', s.total_amount,
+                 'purchase_bill_no', pu.bill_no,
+                 'purchase_total', pu.total_amount
+               ))
+               FROM voucher_allocations va
+               LEFT JOIN sales s ON s.id = va.sale_id
+               LEFT JOIN purchases pu ON pu.id = va.purchase_id
+               WHERE va.voucher_id = mv.id),
+               '[]'::json
+             ) AS allocations
+      FROM money_vouchers mv
+      JOIN parties p ON p.id = mv.party_id
+      LEFT JOIN bank_accounts b ON b.id = mv.bank_account_id
+      JOIN users u ON u.id = mv.created_by
+      WHERE mv.id = $1 AND mv.is_deleted = false
+    `;
+
+    const res = await this.db.query(query, [id]);
+    if (res.rows.length === 0) {
+      throw new NotFoundException('Voucher not found');
     }
 
-    return await this.db.withTransaction(async (client) => {
-      // 1. Insert Money Voucher
+    const voucher = res.rows[0];
+    if (user.role === 'STAFF' && voucher.created_by !== user.id) {
+      throw new ForbiddenException('Staff can only view self-created vouchers');
+    }
+
+    return voucher;
+  }
+
+  async create(dto: CreateVoucherDto, user: AuthUser) {
+    if (dto.mode === 'BANK') {
+      if (!dto.bank_account_id) {
+        throw new BadRequestException('A bank account is required when payment mode is BANK');
+      }
+      const bankRes = await this.db.query(
+        `SELECT id, name, is_active FROM bank_accounts WHERE id = $1`,
+        [dto.bank_account_id],
+      );
+      if (bankRes.rows.length === 0 || !bankRes.rows[0].is_active) {
+        throw new BadRequestException('Invalid or inactive bank account specified');
+      }
+    } else if (dto.mode === 'CASH') {
+      if (dto.bank_account_id) {
+        throw new BadRequestException('Bank account must not be specified when payment mode is CASH');
+      }
+    }
+
+    const partyRes = await this.db.query(
+      `SELECT id, name, whatsapp_number, is_active FROM parties WHERE id = $1`,
+      [dto.party_id],
+    );
+    if (partyRes.rows.length === 0 || !partyRes.rows[0].is_active) {
+      throw new BadRequestException('Invalid or inactive party specified');
+    }
+    const party = partyRes.rows[0];
+
+    const savedVoucher = await this.db.withTransaction(async (client) => {
+      // 1. Insert Money Voucher (entry_at set by PostgreSQL DEFAULT now())
       const voucherRes = await client.query(
         `INSERT INTO money_vouchers (kind, party_id, mode, bank_account_id, amount, reference_no, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -55,7 +161,7 @@ export class VouchersService {
           dto.kind,
           dto.party_id,
           dto.mode,
-          dto.bank_account_id || null,
+          dto.mode === 'BANK' ? dto.bank_account_id : null,
           dto.amount,
           dto.reference_no || null,
           user.id,
@@ -63,7 +169,7 @@ export class VouchersService {
       );
       const voucher = voucherRes.rows[0];
 
-      // 2. Ledger Entry
+      // 2. Insert Ledger Entry
       // RECEIPT reduces customer balance -> CREDIT party ledger
       // PAYMENT reduces supplier balance -> DEBIT party ledger
       const isReceipt = dto.kind === 'RECEIPT';
@@ -80,22 +186,38 @@ export class VouchersService {
       if (dto.allocations && dto.allocations.length > 0) {
         let totalAllocated = 0;
         for (const alloc of dto.allocations) {
+          if (!alloc.sale_id && !alloc.purchase_id) {
+            throw new BadRequestException('Allocation must specify either a sale_id or purchase_id');
+          }
+          if (alloc.sale_id && alloc.purchase_id) {
+            throw new BadRequestException('Allocation cannot specify both sale_id and purchase_id');
+          }
+          if (alloc.amount <= 0) {
+            throw new BadRequestException('Allocation amount must be greater than zero');
+          }
+
           totalAllocated += alloc.amount;
 
           if (alloc.sale_id) {
-            // Check sale outstanding
             const saleRes = await client.query(
-              `SELECT s.id, s.total_amount,
+              `SELECT s.id, s.bill_no, s.party_id, s.total_amount,
                 COALESCE((SELECT SUM(va.amount) FROM voucher_allocations va WHERE va.sale_id = s.id), 0) AS already_allocated
-               FROM sales s WHERE s.id = $1`,
+               FROM sales s WHERE s.id = $1 AND s.is_deleted = false`,
               [alloc.sale_id],
             );
-            if (saleRes.rows.length === 0) throw new NotFoundException('Allocated sale not found');
+            if (saleRes.rows.length === 0) {
+              throw new NotFoundException(`Allocated sale ${alloc.sale_id} not found`);
+            }
             const sale = saleRes.rows[0];
-            const outstanding = sale.total_amount - parseFloat(sale.already_allocated);
+            if (sale.party_id !== dto.party_id) {
+              throw new BadRequestException(`Sale #${sale.bill_no} does not belong to the voucher party`);
+            }
 
-            if (alloc.amount > outstanding + 0.01) {
-              throw new BadRequestException(`Allocation ₹${alloc.amount} exceeds sale outstanding ₹${outstanding}`);
+            const outstanding = parseFloat(sale.total_amount) - parseFloat(sale.already_allocated);
+            if (alloc.amount > outstanding + 0.001) {
+              throw new BadRequestException(
+                `Allocation ₹${alloc.amount} exceeds sale #${sale.bill_no} outstanding ₹${outstanding.toFixed(2)}`,
+              );
             }
 
             await client.query(
@@ -105,22 +227,244 @@ export class VouchersService {
 
             // Update sale status
             const newTotalAlloc = parseFloat(sale.already_allocated) + alloc.amount;
-            const newStatus = newTotalAlloc >= sale.total_amount ? 'PAID' : 'PARTIAL';
+            const newStatus = newTotalAlloc >= parseFloat(sale.total_amount) - 0.001 ? 'PAID' : 'PARTIAL';
             await client.query(`UPDATE sales SET status = $1 WHERE id = $2`, [newStatus, alloc.sale_id]);
           } else if (alloc.purchase_id) {
+            const purchaseRes = await client.query(
+              `SELECT p.id, p.bill_no, p.party_id, p.total_amount,
+                COALESCE((SELECT SUM(va.amount) FROM voucher_allocations va WHERE va.purchase_id = p.id), 0) AS already_allocated
+               FROM purchases p WHERE p.id = $1 AND p.is_deleted = false`,
+              [alloc.purchase_id],
+            );
+            if (purchaseRes.rows.length === 0) {
+              throw new NotFoundException(`Allocated purchase ${alloc.purchase_id} not found`);
+            }
+            const purchase = purchaseRes.rows[0];
+            if (purchase.party_id !== dto.party_id) {
+              throw new BadRequestException(`Purchase #${purchase.bill_no} does not belong to the voucher party`);
+            }
+
+            const outstanding = parseFloat(purchase.total_amount) - parseFloat(purchase.already_allocated);
+            if (alloc.amount > outstanding + 0.001) {
+              throw new BadRequestException(
+                `Allocation ₹${alloc.amount} exceeds purchase #${purchase.bill_no} outstanding ₹${outstanding.toFixed(2)}`,
+              );
+            }
+
             await client.query(
               `INSERT INTO voucher_allocations (voucher_id, purchase_id, amount) VALUES ($1, $2, $3)`,
               [voucher.id, alloc.purchase_id, alloc.amount],
             );
+
+            // Update purchase status
+            const newTotalAlloc = parseFloat(purchase.already_allocated) + alloc.amount;
+            const newStatus = newTotalAlloc >= parseFloat(purchase.total_amount) - 0.001 ? 'PAID' : 'PARTIAL';
+            await client.query(`UPDATE purchases SET status = $1 WHERE id = $2`, [newStatus, alloc.purchase_id]);
           }
         }
 
-        if (totalAllocated > dto.amount + 0.01) {
+        if (totalAllocated > dto.amount + 0.001) {
           throw new BadRequestException('Total bill allocations cannot exceed the voucher amount');
         }
       }
 
       return voucher;
+    });
+
+    // Emit domain event
+    this.eventEmitter.emitEntrySaved(
+      new EntrySavedEvent({
+        type: 'VOUCHER',
+        id: savedVoucher.id,
+        partyId: savedVoucher.party_id,
+        partyName: party.name,
+        partyPhone: party.whatsapp_number,
+        amount: parseFloat(savedVoucher.amount),
+        staffId: user.id,
+        staffName: user.name,
+        billNo: savedVoucher.voucher_no ? Number(savedVoucher.voucher_no) : undefined,
+        timestamp: savedVoucher.entry_at,
+      }),
+    );
+
+    return savedVoucher;
+  }
+
+  async update(id: string, dto: UpdateVoucherDto, user: AuthUser) {
+    if (user.role !== 'OWNER') {
+      throw new ForbiddenException('Only the owner can edit vouchers');
+    }
+
+    return await this.db.withTransaction(async (client) => {
+      const vRes = await client.query(
+        `SELECT * FROM money_vouchers WHERE id = $1 AND is_deleted = false`,
+        [id],
+      );
+      if (vRes.rows.length === 0) throw new NotFoundException('Voucher not found');
+      const original = vRes.rows[0];
+
+      // 1. Reversing ledger row: swap debit & credit of original voucher
+      const origIsReceipt = original.kind === 'RECEIPT';
+      const revDebit = origIsReceipt ? parseFloat(original.amount) : 0;
+      const revCredit = origIsReceipt ? 0 : parseFloat(original.amount);
+
+      await client.query(
+        `INSERT INTO ledger_entries (party_id, source_type, source_id, debit, credit)
+         VALUES ($1, 'VOUCHER_REVERSAL', $2, $3, $4)`,
+        [original.party_id, original.id, revDebit, revCredit],
+      );
+
+      // 2. Fetch and remove old allocations
+      const oldAllocs = await client.query(
+        `SELECT sale_id, purchase_id FROM voucher_allocations WHERE voucher_id = $1`,
+        [id],
+      );
+      await client.query(`DELETE FROM voucher_allocations WHERE voucher_id = $1`, [id]);
+
+      // Recompute affected bills from deleted allocations
+      await this.recomputeBillStatuses(
+        client,
+        oldAllocs.rows.map((r) => r.sale_id).filter(Boolean),
+        oldAllocs.rows.map((r) => r.purchase_id).filter(Boolean),
+      );
+
+      // 3. Compute new voucher values
+      const newKind = dto.kind ?? original.kind;
+      const newPartyId = dto.party_id ?? original.party_id;
+      const newMode = dto.mode ?? original.mode;
+      let newBankAccountId =
+        newMode === 'CASH'
+          ? null
+          : dto.bank_account_id !== undefined
+          ? dto.bank_account_id
+          : original.bank_account_id;
+
+      if (newMode === 'BANK') {
+        if (!newBankAccountId) {
+          throw new BadRequestException('A bank account is required when payment mode is BANK');
+        }
+        const bRes = await client.query(
+          `SELECT id, is_active FROM bank_accounts WHERE id = $1`,
+          [newBankAccountId],
+        );
+        if (bRes.rows.length === 0 || !bRes.rows[0].is_active) {
+          throw new BadRequestException('Invalid or inactive bank account specified');
+        }
+      } else {
+        newBankAccountId = null;
+      }
+
+      const newAmount = dto.amount !== undefined ? dto.amount : parseFloat(original.amount);
+      const newRef = dto.reference_no !== undefined ? dto.reference_no : original.reference_no;
+
+      const updatedVoucherRes = await client.query(
+        `UPDATE money_vouchers
+         SET kind = $1, party_id = $2, mode = $3, bank_account_id = $4, amount = $5, reference_no = $6
+         WHERE id = $7
+         RETURNING *`,
+        [newKind, newPartyId, newMode, newBankAccountId, newAmount, newRef, id],
+      );
+      const updatedVoucher = updatedVoucherRes.rows[0];
+
+      // 4. Insert new ledger row for the updated voucher
+      const isReceipt = newKind === 'RECEIPT';
+      const debit = isReceipt ? 0 : newAmount;
+      const credit = isReceipt ? newAmount : 0;
+
+      await client.query(
+        `INSERT INTO ledger_entries (party_id, source_type, source_id, debit, credit)
+         VALUES ($1, 'VOUCHER', $2, $3, $4)`,
+        [newPartyId, id, debit, credit],
+      );
+
+      // 5. Apply new allocations if supplied
+      if (dto.allocations && dto.allocations.length > 0) {
+        let totalAllocated = 0;
+        for (const alloc of dto.allocations) {
+          if (!alloc.sale_id && !alloc.purchase_id) {
+            throw new BadRequestException('Allocation must specify either a sale_id or purchase_id');
+          }
+          if (alloc.sale_id && alloc.purchase_id) {
+            throw new BadRequestException('Allocation cannot specify both sale_id and purchase_id');
+          }
+          if (alloc.amount <= 0) {
+            throw new BadRequestException('Allocation amount must be greater than zero');
+          }
+
+          totalAllocated += alloc.amount;
+
+          if (alloc.sale_id) {
+            const saleRes = await client.query(
+              `SELECT s.id, s.bill_no, s.party_id, s.total_amount,
+                COALESCE((SELECT SUM(va.amount) FROM voucher_allocations va WHERE va.sale_id = s.id), 0) AS already_allocated
+               FROM sales s WHERE s.id = $1 AND s.is_deleted = false`,
+              [alloc.sale_id],
+            );
+            if (saleRes.rows.length === 0) throw new NotFoundException('Allocated sale not found');
+            const sale = saleRes.rows[0];
+            if (sale.party_id !== newPartyId) {
+              throw new BadRequestException(`Sale #${sale.bill_no} does not belong to the voucher party`);
+            }
+
+            const outstanding = parseFloat(sale.total_amount) - parseFloat(sale.already_allocated);
+            if (alloc.amount > outstanding + 0.001) {
+              throw new BadRequestException(
+                `Allocation ₹${alloc.amount} exceeds sale #${sale.bill_no} outstanding ₹${outstanding.toFixed(2)}`,
+              );
+            }
+
+            await client.query(
+              `INSERT INTO voucher_allocations (voucher_id, sale_id, amount) VALUES ($1, $2, $3)`,
+              [id, alloc.sale_id, alloc.amount],
+            );
+
+            const newTotalAlloc = parseFloat(sale.already_allocated) + alloc.amount;
+            const newStatus = newTotalAlloc >= parseFloat(sale.total_amount) - 0.001 ? 'PAID' : 'PARTIAL';
+            await client.query(`UPDATE sales SET status = $1 WHERE id = $2`, [newStatus, alloc.sale_id]);
+          } else if (alloc.purchase_id) {
+            const pRes = await client.query(
+              `SELECT p.id, p.bill_no, p.party_id, p.total_amount,
+                COALESCE((SELECT SUM(va.amount) FROM voucher_allocations va WHERE va.purchase_id = p.id), 0) AS already_allocated
+               FROM purchases p WHERE p.id = $1 AND p.is_deleted = false`,
+              [alloc.purchase_id],
+            );
+            if (pRes.rows.length === 0) throw new NotFoundException('Allocated purchase not found');
+            const purchase = pRes.rows[0];
+            if (purchase.party_id !== newPartyId) {
+              throw new BadRequestException(`Purchase #${purchase.bill_no} does not belong to the voucher party`);
+            }
+
+            const outstanding = parseFloat(purchase.total_amount) - parseFloat(purchase.already_allocated);
+            if (alloc.amount > outstanding + 0.001) {
+              throw new BadRequestException(
+                `Allocation ₹${alloc.amount} exceeds purchase #${purchase.bill_no} outstanding ₹${outstanding.toFixed(2)}`,
+              );
+            }
+
+            await client.query(
+              `INSERT INTO voucher_allocations (voucher_id, purchase_id, amount) VALUES ($1, $2, $3)`,
+              [id, alloc.purchase_id, alloc.amount],
+            );
+
+            const newTotalAlloc = parseFloat(purchase.already_allocated) + alloc.amount;
+            const newStatus = newTotalAlloc >= parseFloat(purchase.total_amount) - 0.001 ? 'PAID' : 'PARTIAL';
+            await client.query(`UPDATE purchases SET status = $1 WHERE id = $2`, [newStatus, alloc.purchase_id]);
+          }
+        }
+
+        if (totalAllocated > newAmount + 0.001) {
+          throw new BadRequestException('Total bill allocations cannot exceed the updated voucher amount');
+        }
+      }
+
+      // 6. Audit Log
+      await client.query(
+        `INSERT INTO audit_log (actor_id, action, table_name, record_id, before_data, after_data)
+         VALUES ($1, 'UPDATE', 'money_vouchers', $2, $3, $4)`,
+        [user.id, id, JSON.stringify(original), JSON.stringify(updatedVoucher)],
+      );
+
+      return updatedVoucher;
     });
   }
 
@@ -137,10 +481,10 @@ export class VouchersService {
       if (vRes.rows.length === 0) throw new NotFoundException('Voucher not found');
       const voucher = vRes.rows[0];
 
-      // Reversing ledger row: swap debit & credit
+      // 1. Reversing ledger row: swap debit & credit
       const isReceipt = voucher.kind === 'RECEIPT';
-      const debit = isReceipt ? voucher.amount : 0;
-      const credit = isReceipt ? 0 : voucher.amount;
+      const debit = isReceipt ? parseFloat(voucher.amount) : 0;
+      const credit = isReceipt ? 0 : parseFloat(voucher.amount);
 
       await client.query(
         `INSERT INTO ledger_entries (party_id, source_type, source_id, debit, credit)
@@ -148,44 +492,82 @@ export class VouchersService {
         [voucher.party_id, voucher.id, debit, credit],
       );
 
-      // Recompute bill statuses for linked sales
+      // 2. Fetch and remove allocations
       const allocs = await client.query(
-        `SELECT sale_id FROM voucher_allocations WHERE voucher_id = $1 AND sale_id IS NOT NULL`,
+        `SELECT sale_id, purchase_id FROM voucher_allocations WHERE voucher_id = $1`,
         [id],
       );
-
-      // Delete allocations
       await client.query(`DELETE FROM voucher_allocations WHERE voucher_id = $1`, [id]);
 
-      for (const a of allocs.rows) {
-        const sRes = await client.query(
-          `SELECT s.total_amount,
-            COALESCE((SELECT SUM(amount) FROM voucher_allocations WHERE sale_id = s.id), 0) AS allocated
-           FROM sales s WHERE s.id = $1`,
-          [a.sale_id],
-        );
-        if (sRes.rows.length > 0) {
-          const allocTotal = parseFloat(sRes.rows[0].allocated);
-          const totalAmt = parseFloat(sRes.rows[0].total_amount);
-          const status = allocTotal <= 0 ? 'OPEN' : allocTotal < totalAmt ? 'PARTIAL' : 'PAID';
-          await client.query(`UPDATE sales SET status = $1 WHERE id = $2`, [status, a.sale_id]);
-        }
-      }
+      // 3. Recompute bill statuses for affected sales & purchases
+      await this.recomputeBillStatuses(
+        client,
+        allocs.rows.map((r) => r.sale_id).filter(Boolean),
+        allocs.rows.map((r) => r.purchase_id).filter(Boolean),
+      );
 
-      // Mark voucher deleted
+      // 4. Mark voucher deleted
       await client.query(
         `UPDATE money_vouchers SET is_deleted = true, deleted_at = now(), deleted_by = $1 WHERE id = $2`,
         [user.id, id],
       );
 
-      // Audit log
+      // 5. Audit log
       await client.query(
         `INSERT INTO audit_log (actor_id, action, table_name, record_id, before_data, after_data)
          VALUES ($1, 'SOFT_DELETE', 'money_vouchers', $2, $3, $4)`,
         [user.id, id, JSON.stringify(voucher), JSON.stringify({ is_deleted: true, deleted_by: user.id })],
       );
 
-      return { success: true, message: 'Voucher reversed and sales status restored' };
+      return { success: true, message: 'Voucher reversed and bill status restored' };
     });
+  }
+
+  private async recomputeBillStatuses(
+    client: any,
+    saleIds: string[],
+    purchaseIds: string[],
+  ) {
+    const uniqueSaleIds = Array.from(new Set(saleIds));
+    for (const saleId of uniqueSaleIds) {
+      const sRes = await client.query(
+        `SELECT s.total_amount,
+          COALESCE((SELECT SUM(amount) FROM voucher_allocations WHERE sale_id = s.id), 0) AS allocated
+         FROM sales s WHERE s.id = $1`,
+        [saleId],
+      );
+      if (sRes.rows.length > 0) {
+        const allocTotal = parseFloat(sRes.rows[0].allocated);
+        const totalAmt = parseFloat(sRes.rows[0].total_amount);
+        const status =
+          allocTotal <= 0.001
+            ? 'OPEN'
+            : allocTotal >= totalAmt - 0.001
+            ? 'PAID'
+            : 'PARTIAL';
+        await client.query(`UPDATE sales SET status = $1 WHERE id = $2`, [status, saleId]);
+      }
+    }
+
+    const uniquePurchaseIds = Array.from(new Set(purchaseIds));
+    for (const purchaseId of uniquePurchaseIds) {
+      const pRes = await client.query(
+        `SELECT p.total_amount,
+          COALESCE((SELECT SUM(amount) FROM voucher_allocations WHERE purchase_id = p.id), 0) AS allocated
+         FROM purchases p WHERE p.id = $1`,
+        [purchaseId],
+      );
+      if (pRes.rows.length > 0) {
+        const allocTotal = parseFloat(pRes.rows[0].allocated);
+        const totalAmt = parseFloat(pRes.rows[0].total_amount);
+        const status =
+          allocTotal <= 0.001
+            ? 'OPEN'
+            : allocTotal >= totalAmt - 0.001
+            ? 'PAID'
+            : 'PARTIAL';
+        await client.query(`UPDATE purchases SET status = $1 WHERE id = $2`, [status, purchaseId]);
+      }
+    }
   }
 }
