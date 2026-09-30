@@ -5,17 +5,23 @@ import {
   Body,
   Res,
   Req,
-  UseGuards,
   UnauthorizedException,
+  Ip,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { Response, Request } from 'express';
 import { AuthService } from './auth.service';
 import { Public, CurrentUser } from '../common/decorators';
 import { AuthUser } from '../common/decorators/current-user.decorator';
+import { IsNotEmpty, IsString } from 'class-validator';
 
-class LoginDto {
+export class LoginDto {
+  @IsNotEmpty()
+  @IsString()
   username: string;
+
+  @IsNotEmpty()
+  @IsString()
   password: string;
 }
 
@@ -26,12 +32,16 @@ export class AuthController {
 
   @Public()
   @Post('login')
-  @ApiOperation({ summary: 'Login with username and password, setting secure httpOnly cookies' })
+  @ApiOperation({ summary: 'Login with username and password, setting secure httpOnly cookies with rate limiting' })
+  @ApiResponse({ status: 200, description: 'Authentication successful' })
+  @ApiResponse({ status: 401, description: 'Invalid credentials or deactivated user' })
+  @ApiResponse({ status: 429, description: 'Too many failed login attempts' })
   async login(
     @Body() body: LoginDto,
+    @Ip() clientIp: string,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const user = await this.authService.validateUser(body.username, body.password);
+    const user = await this.authService.validateUser(body.username, body.password, clientIp);
     const tokens = await this.authService.login(user);
 
     // Set HTTP-only secure cookies
@@ -46,7 +56,7 @@ export class AuthController {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      path: '/auth/refresh',
+      path: '/api/v1/auth/refresh',
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
@@ -55,7 +65,7 @@ export class AuthController {
 
   @Public()
   @Post('refresh')
-  @ApiOperation({ summary: 'Rotate refresh token and obtain new access token' })
+  @ApiOperation({ summary: 'Rotate refresh token and obtain a new access/refresh token pair' })
   async refresh(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
@@ -67,11 +77,20 @@ export class AuthController {
 
     const tokens = await this.authService.refreshToken(token);
 
+    // Rotate both tokens in httpOnly cookies
     res.cookie('access_token', tokens.accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       maxAge: 15 * 60 * 1000,
+    });
+
+    res.cookie('refresh_token', tokens.refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/api/v1/auth/refresh',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
     return tokens;
@@ -81,7 +100,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Log out and invalidate session cookies' })
   logout(@Res({ passthrough: true }) res: Response) {
     res.clearCookie('access_token');
-    res.clearCookie('refresh_token', { path: '/auth/refresh' });
+    res.clearCookie('refresh_token', { path: '/api/v1/auth/refresh' });
     return { success: true, message: 'Logged out successfully' };
   }
 
