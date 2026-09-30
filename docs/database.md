@@ -45,3 +45,23 @@
   - `OPEN`: $\sum(\text{allocations}) = 0$
   - `PARTIAL`: $0 < \sum(\text{allocations}) < \text{total\_amount}$
   - `PAID`: $\sum(\text{allocations}) \ge \text{total\_amount}$
+
+## Migration & ORM Strategy Decision
+
+We selected **TypeORM / Native SQL Migrations** over Prisma for this domain. Here is the rationale:
+
+1. **Native PostgreSQL Pl/PgSQL Triggers & Invariants**:
+   The immutable tables (`ledger_entries`, `stock_movements`, `audit_log`) require strict `BEFORE UPDATE OR DELETE` triggers that throw PL/pgSQL exceptions. Standard Prisma migrations do not natively model or manage custom PostgreSQL procedural triggers.
+2. **Session-Level Row-Level Security (RLS)**:
+   Kumkum Payal enforces database-level multi-tenant staff isolation using:
+   ```sql
+   SET LOCAL app.current_user_id = '<uuid>';
+   SET LOCAL app.current_role = 'STAFF' | 'OWNER';
+   ```
+   Executing session variables on pooled connections requires direct access to transactional query runners, which maps naturally to native SQL execution and TypeORM `QueryRunner`.
+3. **Independent Sequences**:
+   Bill numbering requires explicit PostgreSQL sequences (`sale_bill_seq`, `purchase_bill_seq`, `voucher_seq`) with custom offsets (1001, 5001, 2001) that operate independently of table primary keys (which use UUID v4).
+
+### Running Migrations & Seeds
+- Apply schema migrations: `npm run migration:run` (or automatic via Docker `init.sql`)
+- Seed demo dataset: `npm run seed` (creates 1 OWNER, items, 2 parties, bank account, and reminder settings)
