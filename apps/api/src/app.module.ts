@@ -11,6 +11,8 @@ import { VouchersModule } from './vouchers/vouchers.module';
 import { LedgerModule } from './ledger/ledger.module';
 import { StockModule } from './stock/stock.module';
 import { AuditModule } from './audit/audit.module';
+import { WhatsAppModule } from './whatsapp/whatsapp.module';
+import { BillingModule } from './billing/billing.module';
 import { HealthController } from './health/health.controller';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -29,6 +31,8 @@ import { SanitizeInputInterceptor } from './common/interceptors/sanitize-input.i
     LedgerModule,
     StockModule,
     AuditModule,
+    WhatsAppModule,
+    BillingModule,
   ],
   controllers: [HealthController],
   providers: [
