@@ -11,7 +11,7 @@ import {
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { Response, Request } from 'express';
 import { AuthService } from './auth.service';
-import { Public, CurrentUser } from '../common/decorators';
+import { Public, CurrentUser, Roles } from '../common/decorators';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { IsNotEmpty, IsString } from 'class-validator';
 
@@ -96,6 +96,7 @@ export class AuthController {
     return tokens;
   }
 
+  @Roles('OWNER', 'STAFF')
   @Post('logout')
   @ApiOperation({ summary: 'Log out and invalidate session cookies' })
   logout(@Res({ passthrough: true }) res: Response) {
@@ -104,6 +105,7 @@ export class AuthController {
     return { success: true, message: 'Logged out successfully' };
   }
 
+  @Roles('OWNER', 'STAFF')
   @Get('me')
   @ApiOperation({ summary: 'Retrieve currently logged in user profile and role' })
   getProfile(@CurrentUser() user: AuthUser) {
