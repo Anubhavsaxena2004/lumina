@@ -1,6 +1,10 @@
 # Kumkum Payal (कुंकुम पायल) — Jewellery Accounting & Inventory System
 
+[![Kumkum Payal CI](https://github.com/Anubhavsaxena2004/lumina/actions/workflows/ci.yml/badge.svg)](https://github.com/Anubhavsaxena2004/lumina/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 An enterprise-grade, mobile-responsive accounting and inventory management system designed specifically for jewellery trading businesses and artisan manufacturers (featuring Polish and Meena / Enamel job-work tracking).
+
 
 ## Technology Stack
 
