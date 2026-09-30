@@ -20,7 +20,7 @@ export interface UpdateItemDto {
 export class ItemsService {
   constructor(private readonly db: DatabaseService) {}
 
-  async findAll(search?: string) {
+  async findAll(search?: string, limit = 50, offset = 0) {
     let query = `
       SELECT i.id, i.name, i.category, i.is_active,
              COALESCE(SUM(sm.pieces_delta), 0) AS stock_pieces,
@@ -30,13 +30,16 @@ export class ItemsService {
       WHERE i.is_active = true
     `;
     const params: any[] = [];
+    let idx = 1;
 
     if (search) {
-      query += ` AND i.name ILIKE $1`;
+      query += ` AND i.name ILIKE $${idx++}`;
       params.push(`%${search}%`);
     }
 
-    query += ` GROUP BY i.id, i.name, i.category, i.is_active ORDER BY i.name ASC`;
+    query += ` GROUP BY i.id, i.name, i.category, i.is_active ORDER BY i.name ASC LIMIT $${idx++} OFFSET $${idx}`;
+    params.push(limit, offset);
+
     const res = await this.db.query(query, params);
     return res.rows;
   }

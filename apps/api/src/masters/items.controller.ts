@@ -19,8 +19,12 @@ export class ItemsController {
   @Get()
   @Roles('OWNER', 'STAFF')
   @ApiOperation({ summary: 'List all items with current stock balances' })
-  findAll(@Query('search') search?: string) {
-    return this.itemsService.findAll(search);
+  findAll(
+    @Query('search') search?: string,
+    @Query('limit') limit = 50,
+    @Query('offset') offset = 0,
+  ) {
+    return this.itemsService.findAll(search, Number(limit), Number(offset));
   }
 
   @Get(':id')
