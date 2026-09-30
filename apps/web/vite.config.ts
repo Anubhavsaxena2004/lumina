@@ -6,9 +6,21 @@ export default defineConfig({
   server: {
     port: 3000,
     host: '0.0.0.0',
+    proxy: {
+      '/api': {
+        target: process.env.VITE_API_URL || 'http://localhost:4000',
+        changeOrigin: true,
+        secure: false,
+      },
+    },
   },
   preview: {
     port: 3000,
     host: '0.0.0.0',
+  },
+  // @ts-ignore
+  test: {
+    globals: true,
+    environment: 'jsdom',
   },
 });
