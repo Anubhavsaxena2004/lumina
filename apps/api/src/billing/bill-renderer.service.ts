@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { DatabaseService } from '../database/database.service';
 
 @Injectable()
@@ -20,13 +21,19 @@ export class BillRendererService {
       month: '2-digit',
       year: 'numeric',
     });
+    const formattedTime = new Date(sale.entry_at).toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
     const formattedDueDate = new Date(sale.due_date).toLocaleDateString('en-GB', {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
     });
 
-    const linesHtml = sale.lines
+    const lines = sale.lines || [];
+    const linesHtml = lines
       .map(
         (line: any, idx: number) => `
         <tr>
@@ -68,12 +75,12 @@ export class BillRendererService {
       <div class="header">
         <div>
           <div class="brand-name">Kumkum Payal</div>
-          <div class="brand-sub">Exclusive Jewellery & Job Work</div>
+          <div class="brand-sub">Exclusive Jewellery & Polish/Meena Job Work</div>
           <div style="font-size: 12px; color: #7A7268; margin-top: 6px;">Johri Bazaar, Jaipur · GSTIN: 08AAAPK1234F1Z0</div>
         </div>
         <div class="bill-badge">
           <h2>INVOICE #${sale.bill_no}</h2>
-          <p>Date: <strong>${formattedDate}</strong></p>
+          <p>Date: <strong>${formattedDate} ${formattedTime}</strong></p>
           <p>Due Date: <strong style="color: #9B1C31;">${formattedDueDate}</strong></p>
         </div>
       </div>
@@ -83,6 +90,7 @@ export class BillRendererService {
           <div style="color: #7A7268; font-size: 11px; text-transform: uppercase; font-weight: 700;">Billed To:</div>
           <div style="font-size: 18px; font-weight: 700; color: #2B2B2B; margin-top: 4px;">${sale.party_name}</div>
           <div style="color: #5C554E; margin-top: 2px;">Phone: ${sale.party_phone || 'N/A'}</div>
+          ${sale.party_address ? `<div style="color: #7A7268; font-size: 12px; margin-top: 2px;">${sale.party_address}</div>` : ''}
         </div>
         <div style="text-align: right;">
           <div style="color: #7A7268; font-size: 11px; text-transform: uppercase; font-weight: 700;">Status:</div>
@@ -122,7 +130,7 @@ export class BillRendererService {
       </div>
 
       <div class="footer">
-        <p>This is a computer-generated tax invoice. Date and time are recorded automatically.</p>
+        <p>This is an authentic computer-generated invoice. Date and time are recorded automatically by the server.</p>
         <p style="margin-top: 4px;">Thank you for your business! · Kumkum Payal Jewellery</p>
       </div>
     </body>
@@ -133,7 +141,6 @@ export class BillRendererService {
     const html = this.generateHtmlTemplate(sale);
 
     try {
-      // Dynamic import puppeteer to handle container and non-container environments
       const puppeteer = require('puppeteer');
       const browser = await puppeteer.launch({
         headless: 'new',
@@ -145,15 +152,23 @@ export class BillRendererService {
       await page.setViewport({ width: 800, height: 1000, deviceScaleFactor: 2 });
       await page.setContent(html, { waitUntil: 'networkidle0' });
 
-      const imageBuffer = await page.screenshot({ type: 'jpeg', quality: 95, fullPage: true });
+      const rawBuffer = await page.screenshot({ type: 'jpeg', quality: 90, fullPage: true });
       await browser.close();
 
-      return imageBuffer;
-    } catch (err) {
-      this.logger.warn(`Puppeteer browser launch failed (${err.message}). Using sharp fallback.`);
-      
-      // Fallback: render SVG card converted to high-res JPG via Sharp
+      // Optimize image via Sharp with mozjpeg compression
       const sharp = require('sharp');
+      return await sharp(rawBuffer).jpeg({ quality: 85, mozjpeg: true }).toBuffer();
+    } catch (err: any) {
+      this.logger.warn(`Puppeteer browser launch failed (${err.message}). Using sharp card fallback.`);
+
+      const sharp = require('sharp');
+      const linesList = (sale.lines || [])
+        .map((l: any, i: number) => {
+          const y = 280 + i * 35;
+          return `<text x="50" y="${y}" font-family="Arial, sans-serif" font-size="14" fill="#2B2B2B">${l.item_name} - ${l.pieces} pcs / ${parseFloat(l.weight_kg).toFixed(3)} Kg: ₹${parseFloat(l.amount).toLocaleString('en-IN')}</text>`;
+        })
+        .join('');
+
       const svg = `
         <svg width="800" height="900" xmlns="http://www.w3.org/2000/svg">
           <rect width="100%" height="100%" fill="#FBF7F2"/>
@@ -162,27 +177,88 @@ export class BillRendererService {
           <text x="50" y="105" font-family="Arial, sans-serif" font-size="14" fill="#B8893B">INVOICE #${sale.bill_no}</text>
           <line x1="50" y1="125" x2="750" y2="125" stroke="#9B1C31" stroke-width="2"/>
           <text x="50" y="160" font-family="Arial, sans-serif" font-size="16" fill="#2B2B2B">Billed to: ${sale.party_name}</text>
-          <text x="50" y="190" font-family="Arial, sans-serif" font-size="14" fill="#7A7268">Due Date: ${sale.due_date}</text>
-          <text x="50" y="240" font-family="Arial, sans-serif" font-size="22" font-weight="bold" fill="#2B2B2B">Total Amount: ₹${parseFloat(sale.total_amount).toLocaleString('en-IN')}</text>
-          <text x="50" y="820" font-family="Arial, sans-serif" font-size="12" fill="#7A7268">Date and time are recorded automatically.</text>
+          <text x="50" y="190" font-family="Arial, sans-serif" font-size="14" fill="#7A7268">Phone: ${sale.party_phone || 'N/A'}</text>
+          <text x="50" y="220" font-family="Arial, sans-serif" font-size="14" fill="#7A7268">Due Date: ${sale.due_date}</text>
+          <line x1="50" y1="240" x2="750" y2="240" stroke="#EFEAE3" stroke-width="1"/>
+          ${linesList}
+          <line x1="50" y1="760" x2="750" y2="760" stroke="#EFEAE3" stroke-width="2"/>
+          <text x="50" y="800" font-family="Arial, sans-serif" font-size="22" font-weight="bold" fill="#9B1C31">Total Payable: ₹${parseFloat(sale.total_amount).toLocaleString('en-IN')}</text>
+          <text x="50" y="840" font-family="Arial, sans-serif" font-size="12" fill="#7A7268">Date and time are recorded automatically by the server.</text>
         </svg>
       `;
-      return await sharp(Buffer.from(svg)).jpeg({ quality: 90 }).toBuffer();
+      return await sharp(Buffer.from(svg)).jpeg({ quality: 85, mozjpeg: true }).toBuffer();
     }
   }
 
-  async saveAndRecordBill(sale: any): Promise<{ filePath: string; fileName: string }> {
+  async saveAndRecordBill(sale: any, messageId?: number): Promise<{ filePath: string; fileName: string; billImageId: string }> {
     const buffer = await this.renderBillToJpg(sale);
     const fileName = `bill_${sale.bill_no}_${sale.id}.jpg`;
     const filePath = path.join(this.storageDir, fileName);
 
     fs.writeFileSync(filePath, buffer);
 
-    await this.db.query(
-      `INSERT INTO bill_images (sale_id, file_path) VALUES ($1, $2)`,
-      [sale.id, filePath],
+    const res = await this.db.query(
+      `INSERT INTO bill_images (sale_id, file_path, message_id)
+       VALUES ($1, $2, $3)
+       RETURNING id`,
+      [sale.id, filePath, messageId || null],
     );
 
-    return { filePath, fileName };
+    return { filePath, fileName, billImageId: res.rows[0].id };
+  }
+
+  getBillFilePath(saleId: string): string | null {
+    const files = fs.readdirSync(this.storageDir);
+    const match = files.find((f) => f.includes(saleId));
+    return match ? path.join(this.storageDir, match) : null;
+  }
+
+  generateSignedUrl(saleId: string, expiresInMinutes = 30): { url: string; token: string; expiresAt: string } {
+    const secret = process.env.JWT_SECRET || 'kumkum-bill-signing-secret';
+    const expiresTimestamp = Date.now() + expiresInMinutes * 60 * 1000;
+    const expiresAt = new Date(expiresTimestamp).toISOString();
+
+    const dataToSign = `${saleId}:${expiresTimestamp}`;
+    const signature = crypto.createHmac('sha256', secret).update(dataToSign).digest('hex');
+
+    const payload = JSON.stringify({ saleId, exp: expiresTimestamp, sig: signature });
+    const token = Buffer.from(payload).toString('base64url');
+
+    const baseUrl = process.env.PUBLIC_APP_URL || 'http://localhost:4000';
+    const url = `${baseUrl}/api/v1/sales/bill/media/${token}`;
+
+    return { url, token, expiresAt };
+  }
+
+  verifySignedUrlToken(token: string): { valid: boolean; saleId?: string; error?: string } {
+    try {
+      const secret = process.env.JWT_SECRET || 'kumkum-bill-signing-secret';
+      const decoded = Buffer.from(token, 'base64url').toString('utf-8');
+      const { saleId, exp, sig } = JSON.parse(decoded);
+
+      if (!saleId || !exp || !sig) {
+        return { valid: false, error: 'Malformed token payload' };
+      }
+
+      if (Date.now() > exp) {
+        return { valid: false, error: 'Signed URL has expired' };
+      }
+
+      const dataToSign = `${saleId}:${exp}`;
+      const expectedSignature = crypto.createHmac('sha256', secret).update(dataToSign).digest('hex');
+
+      const isSignatureValid = crypto.timingSafeEqual(
+        Buffer.from(sig, 'hex'),
+        Buffer.from(expectedSignature, 'hex'),
+      );
+
+      if (!isSignatureValid) {
+        return { valid: false, error: 'Invalid URL signature' };
+      }
+
+      return { valid: true, saleId };
+    } catch {
+      return { valid: false, error: 'Invalid token format' };
+    }
   }
 }

@@ -1,8 +1,18 @@
-import { Controller, Get, Post, Body, Query, Req, Res } from '@nestjs/common';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Query,
+  Headers,
+  Req,
+  Res,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { Response, Request } from 'express';
 import { WhatsAppService } from './whatsapp.service';
-import { Public } from '../common/decorators';
+import { Public, Roles } from '../common/decorators';
 
 @ApiTags('WhatsApp')
 @Controller('whatsapp')
@@ -27,8 +37,19 @@ export class WhatsAppController {
 
   @Public()
   @Post('webhook')
-  @ApiOperation({ summary: 'Meta WhatsApp delivery receipt webhook receiver' })
-  async handleWebhook(@Body() body: any) {
+  @ApiOperation({ summary: 'Meta WhatsApp delivery receipt webhook receiver with signature verification' })
+  async handleWebhook(
+    @Headers('x-hub-signature-256') signature: string,
+    @Req() req: Request,
+    @Body() body: any,
+  ) {
+    // Signature verification if WHATSAPP_APP_SECRET is configured
+    const rawBody = (req as any).rawBody || JSON.stringify(body);
+    const isValid = this.whatsAppService.verifyWebhookSignature(signature, rawBody);
+    if (!isValid) {
+      throw new UnauthorizedException('Invalid X-Hub-Signature-256 signature');
+    }
+
     const entry = body?.entry?.[0];
     const changes = entry?.changes?.[0];
     const statusObj = changes?.value?.statuses?.[0];
@@ -40,5 +61,21 @@ export class WhatsAppController {
     }
 
     return { status: 'EVENT_RECEIVED' };
+  }
+
+  @Get('messages')
+  @Roles('OWNER')
+  @ApiOperation({ summary: 'List WhatsApp message logs and queue status (Owner only)' })
+  @ApiQuery({ name: 'status', required: false })
+  @ApiQuery({ name: 'recipient', required: false })
+  @ApiQuery({ name: 'limit', required: false })
+  @ApiQuery({ name: 'offset', required: false })
+  getMessages(
+    @Query('limit') limit = 50,
+    @Query('offset') offset = 0,
+    @Query('status') status?: string,
+    @Query('recipient') recipient?: string,
+  ) {
+    return this.whatsAppService.getMessages(Number(limit), Number(offset), status, recipient);
   }
 }
