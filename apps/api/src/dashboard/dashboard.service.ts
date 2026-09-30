@@ -1,11 +1,25 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional, Inject } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
+import { IClock, SystemClock } from '../common/clock/clock.interface';
 
 @Injectable()
 export class DashboardService {
-  constructor(private readonly db: DatabaseService) {}
+  private clock: IClock;
+
+  constructor(
+    private readonly db: DatabaseService,
+    @Optional() @Inject('IClock') clock?: IClock,
+  ) {
+    this.clock = clock || new SystemClock();
+  }
+
+  setClock(clock: IClock) {
+    this.clock = clock;
+  }
 
   async getOwnerMetrics() {
+    const todayStr = this.clock.todayString();
+
     // 1. Receivables & Payables across all parties
     const balanceRes = await this.db.query(`
       SELECT 
@@ -31,7 +45,7 @@ export class DashboardService {
       FROM sales s
       WHERE s.is_deleted = false
         AND s.status <> 'PAID'
-        AND s.due_date < CURRENT_DATE
+        AND s.due_date < DATE '${todayStr}'
     `);
 
     // 3. Today's Sales & Purchases
@@ -40,9 +54,9 @@ export class DashboardService {
         COALESCE(SUM(CASE WHEN source = 'SALE' THEN total_amount ELSE 0 END), 0) AS today_sales,
         COALESCE(SUM(CASE WHEN source = 'PURCHASE' THEN total_amount ELSE 0 END), 0) AS today_purchases
       FROM (
-        SELECT 'SALE' AS source, total_amount FROM sales WHERE DATE(entry_at) = CURRENT_DATE AND is_deleted = false
+        SELECT 'SALE' AS source, total_amount FROM sales WHERE DATE(entry_at) = DATE '${todayStr}' AND is_deleted = false
         UNION ALL
-        SELECT 'PURCHASE' AS source, total_amount FROM purchases WHERE DATE(entry_at) = CURRENT_DATE AND is_deleted = false
+        SELECT 'PURCHASE' AS source, total_amount FROM purchases WHERE DATE(entry_at) = DATE '${todayStr}' AND is_deleted = false
       ) combined
     `);
 
@@ -109,16 +123,23 @@ export class DashboardService {
     `);
 
     return {
-      totalReceivable: parseFloat(balanceRes.rows[0]?.total_receivable || 0),
-      totalPayable: parseFloat(balanceRes.rows[0]?.total_payable || 0),
-      overdueAmount: parseFloat(overdueRes.rows[0]?.overdue_amount || 0),
+      totalReceivable: Math.round(parseFloat(balanceRes.rows[0]?.total_receivable || 0) * 100) / 100,
+      totalPayable: Math.round(parseFloat(balanceRes.rows[0]?.total_payable || 0) * 100) / 100,
+      overdueAmount: Math.round(parseFloat(overdueRes.rows[0]?.overdue_amount || 0) * 100) / 100,
       overdueCount: parseInt(overdueRes.rows[0]?.overdue_count || 0, 10),
-      todaySales: parseFloat(todayRes.rows[0]?.today_sales || 0),
-      todayPurchases: parseFloat(todayRes.rows[0]?.today_purchases || 0),
-      cashBalance: parseFloat(cashRes.rows[0]?.cash_balance || 0),
-      bankBalance: parseFloat(bankRes.rows[0]?.total_bank_balance || 0),
-      topCustomersByDues: topDuesRes.rows,
-      lowStockItems: lowStockRes.rows,
+      todaySales: Math.round(parseFloat(todayRes.rows[0]?.today_sales || 0) * 100) / 100,
+      todayPurchases: Math.round(parseFloat(todayRes.rows[0]?.today_purchases || 0) * 100) / 100,
+      cashBalance: Math.round(parseFloat(cashRes.rows[0]?.cash_balance || 0) * 100) / 100,
+      bankBalance: Math.round(parseFloat(bankRes.rows[0]?.total_bank_balance || 0) * 100) / 100,
+      topCustomersByDues: topDuesRes.rows.map((r) => ({
+        ...r,
+        pending_amount: Math.round(parseFloat(r.pending_amount) * 100) / 100,
+      })),
+      lowStockItems: lowStockRes.rows.map((r) => ({
+        ...r,
+        pieces: parseInt(r.pieces, 10),
+        weight_kg: Math.round(parseFloat(r.weight_kg) * 1000) / 1000,
+      })),
       recentEntries: recentRes.rows,
     };
   }

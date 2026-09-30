@@ -4,9 +4,9 @@ import {
   Patch,
   Post,
   Body,
-  UseGuards,
+  Query,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { RemindersService, UpdateReminderSettingsDto } from './reminders.service';
 import { Roles, CurrentUser } from '../common/decorators';
 import { AuthUser } from '../common/decorators/current-user.decorator';
@@ -30,11 +30,21 @@ export class RemindersController {
     return this.remindersService.updateSettings(dto);
   }
 
+  @Post('test')
+  @Roles('OWNER')
+  @ApiOperation({ summary: 'Send a test reminder via WhatsApp mock/cloud provider (Owner only)' })
+  @ApiQuery({ name: 'phone', required: false, description: 'Optional target phone number (defaults to owner)' })
+  sendTestReminder(@Query('phone') phone?: string) {
+    return this.remindersService.sendTestReminder(phone);
+  }
+
   @Post('trigger')
   @Roles('OWNER')
   @ApiOperation({ summary: 'Manually trigger daily overdue reminders run (Owner only / Testing)' })
-  triggerRun() {
-    return this.remindersService.runDailyReminderJob();
+  @ApiQuery({ name: 'target_date', required: false, description: 'Optional simulated date (YYYY-MM-DD)' })
+  triggerRun(@Query('target_date') targetDateStr?: string) {
+    const targetDate = targetDateStr ? new Date(targetDateStr) : undefined;
+    return this.remindersService.runDailyReminderJob(targetDate);
   }
 
   @Get('staff/overdue')
