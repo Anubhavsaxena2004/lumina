@@ -37,6 +37,7 @@ let mockItems: Item[] = [
   { id: 'i2', name: 'Silver Traditional Payal 92.5', category: 'Silver Ornaments', stock_pieces: 84, stock_kg: 8.640, is_active: true },
   { id: 'i3', name: 'Silver Heavy Kada 80T', category: 'Silver Ornaments', stock_pieces: 32, stock_kg: 4.800, is_active: true },
   { id: 'i4', name: 'CZ Solitaire Ring Mountings', category: 'Diamond Studded', stock_pieces: 4, stock_kg: 0.035, is_active: true },
+  { id: 'i5', name: 'Gold Bracelet 22K', category: 'Gold Ornaments', stock_pieces: 12, stock_kg: 0.280, is_active: true },
 ];
 
 let mockStockMovements: StockMovement[] = [
@@ -46,6 +47,7 @@ let mockStockMovements: StockMovement[] = [
   { id: 'sm_4', item_id: 'i2', entry_at: '2026-09-29T16:00:00Z', source_type: 'Purchase #5001', pieces_delta: 4, kg_delta: 0.440, reference: 'Supplier purchase #5001' },
   { id: 'sm_5', item_id: 'i3', entry_at: '2026-09-01T10:00:00Z', source_type: 'Opening Stock', pieces_delta: 32, kg_delta: 4.800, reference: 'Initial stock register balance' },
   { id: 'sm_6', item_id: 'i4', entry_at: '2026-09-01T10:00:00Z', source_type: 'Opening Stock', pieces_delta: 4, kg_delta: 0.035, reference: 'Initial stock register balance' },
+  { id: 'sm_7', item_id: 'i5', entry_at: '2026-09-01T10:00:00Z', source_type: 'Opening Stock', pieces_delta: 12, kg_delta: 0.280, reference: 'Initial stock register balance' },
 ];
 
 let mockBankAccounts: BankAccount[] = [
