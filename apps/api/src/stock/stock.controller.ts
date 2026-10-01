@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { StockService } from './stock.service';
 import { Roles } from '../common/decorators';
@@ -7,6 +7,21 @@ import { Roles } from '../common/decorators';
 @Controller('stock')
 export class StockController {
   constructor(private readonly stockService: StockService) {}
+
+  @Post('adjust')
+  @Roles('OWNER', 'STAFF')
+  @ApiOperation({ summary: 'Add or adjust stock pieces and weight for an item' })
+  adjustStock(
+    @Body()
+    dto: {
+      item_id: string;
+      pieces_delta: number;
+      kg_delta: number;
+      reason?: string;
+    },
+  ) {
+    return this.stockService.adjustStock(dto);
+  }
 
   @Get('register')
   @Roles('OWNER', 'STAFF')

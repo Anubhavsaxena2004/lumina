@@ -35,6 +35,31 @@ export interface Item {
   is_active: boolean;
 }
 
+export interface CreateItemDto {
+  name: string;
+  category?: string;
+  stock_pieces?: number;
+  stock_kg?: number;
+}
+
+export interface AdjustStockDto {
+  item_id: string;
+  pieces_delta: number;
+  kg_delta: number;
+  reason?: string;
+}
+
+export interface StockMovement {
+  id: string | number;
+  item_id: string;
+  entry_at: string;
+  source_type: string;
+  source_id?: string;
+  reference?: string;
+  pieces_delta: number;
+  kg_delta: number;
+}
+
 export interface BankAccount {
   id: string;
   name: string;

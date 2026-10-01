@@ -11,6 +11,9 @@ import {
   ReminderSettings,
   AuditLogRow,
   DashboardStats,
+  CreateItemDto,
+  AdjustStockDto,
+  StockMovement,
 } from './types';
 
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK !== 'false';
@@ -34,6 +37,15 @@ let mockItems: Item[] = [
   { id: 'i2', name: 'Silver Traditional Payal 92.5', category: 'Silver Ornaments', stock_pieces: 84, stock_kg: 8.640, is_active: true },
   { id: 'i3', name: 'Silver Heavy Kada 80T', category: 'Silver Ornaments', stock_pieces: 32, stock_kg: 4.800, is_active: true },
   { id: 'i4', name: 'CZ Solitaire Ring Mountings', category: 'Diamond Studded', stock_pieces: 4, stock_kg: 0.035, is_active: true },
+];
+
+let mockStockMovements: StockMovement[] = [
+  { id: 'sm_1', item_id: 'i1', entry_at: '2026-09-01T10:00:00Z', source_type: 'Opening Stock', pieces_delta: 20, kg_delta: 0.500, reference: 'Initial stock register balance' },
+  { id: 'sm_2', item_id: 'i1', entry_at: '2026-09-30T10:30:00Z', source_type: 'Sale #1048', pieces_delta: -2, kg_delta: -0.075, reference: 'Customer invoice #1048' },
+  { id: 'sm_3', item_id: 'i2', entry_at: '2026-09-01T10:00:00Z', source_type: 'Opening Stock', pieces_delta: 80, kg_delta: 8.200, reference: 'Initial stock register balance' },
+  { id: 'sm_4', item_id: 'i2', entry_at: '2026-09-29T16:00:00Z', source_type: 'Purchase #5001', pieces_delta: 4, kg_delta: 0.440, reference: 'Supplier purchase #5001' },
+  { id: 'sm_5', item_id: 'i3', entry_at: '2026-09-01T10:00:00Z', source_type: 'Opening Stock', pieces_delta: 32, kg_delta: 4.800, reference: 'Initial stock register balance' },
+  { id: 'sm_6', item_id: 'i4', entry_at: '2026-09-01T10:00:00Z', source_type: 'Opening Stock', pieces_delta: 4, kg_delta: 0.035, reference: 'Initial stock register balance' },
 ];
 
 let mockBankAccounts: BankAccount[] = [
@@ -143,20 +155,77 @@ export async function listItems(search?: string): Promise<Item[]> {
   return apiClient<Item[]>(`/items${search ? `?search=${encodeURIComponent(search)}` : ''}`);
 }
 
-export async function createItem(dto: { name: string; category?: string }): Promise<Item> {
+export async function createItem(dto: CreateItemDto): Promise<Item> {
+  const pieces = Number(dto.stock_pieces) || 0;
+  const kg = Math.round((Number(dto.stock_kg) || 0) * 1000) / 1000;
+
   if (USE_MOCK) {
     const newItem: Item = {
       id: `i_${Date.now()}`,
-      name: dto.name,
-      category: dto.category,
-      stock_pieces: 0,
-      stock_kg: 0,
+      name: dto.name.trim(),
+      category: dto.category || 'Gold Ornaments',
+      stock_pieces: pieces,
+      stock_kg: kg,
       is_active: true,
     };
     mockItems.push(newItem);
+
+    if (pieces > 0 || kg > 0) {
+      mockStockMovements.unshift({
+        id: `sm_${Date.now()}`,
+        item_id: newItem.id,
+        entry_at: new Date().toISOString(),
+        source_type: 'Opening Stock',
+        pieces_delta: pieces,
+        kg_delta: kg,
+        reference: 'Initial stock register balance',
+      });
+    }
+
     return newItem;
   }
-  return apiClient<Item>('/items', { method: 'POST', body: JSON.stringify(dto) });
+  return apiClient<Item>('/items', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...dto,
+      opening_pieces: pieces,
+      opening_weight_kg: kg,
+    }),
+  });
+}
+
+export async function adjustStock(dto: AdjustStockDto): Promise<{ success: boolean; item?: Item }> {
+  const piecesDelta = Number(dto.pieces_delta) || 0;
+  const kgDelta = Math.round((Number(dto.kg_delta) || 0) * 1000) / 1000;
+
+  if (USE_MOCK) {
+    const item = mockItems.find((i) => i.id === dto.item_id);
+    if (!item) throw new Error('Item not found');
+
+    item.stock_pieces = Math.max(0, item.stock_pieces + piecesDelta);
+    item.stock_kg = Math.max(0, Math.round((item.stock_kg + kgDelta) * 1000) / 1000);
+
+    mockStockMovements.unshift({
+      id: `sm_${Date.now()}`,
+      item_id: item.id,
+      entry_at: new Date().toISOString(),
+      source_type: piecesDelta >= 0 && kgDelta >= 0 ? 'Stock Addition' : 'Stock Adjustment',
+      pieces_delta: piecesDelta,
+      kg_delta: kgDelta,
+      reference: dto.reason || (piecesDelta >= 0 ? 'Manual Stock Inward' : 'Manual Stock Deduction'),
+    });
+
+    return { success: true, item };
+  }
+  return apiClient('/stock/adjust', { method: 'POST', body: JSON.stringify(dto) });
+}
+
+export async function getItemMovements(itemId: string): Promise<StockMovement[]> {
+  if (USE_MOCK) {
+    return mockStockMovements.filter((sm) => sm.item_id === itemId);
+  }
+  const res = await apiClient<any>(`/stock/movements/${itemId}`);
+  return res.movements || [];
 }
 
 export async function listBankAccounts(): Promise<BankAccount[]> {
@@ -200,6 +269,24 @@ export async function createSale(dto: any): Promise<Sale> {
       lines,
     };
     mockSales.unshift(newSale);
+
+    lines.forEach((l: any) => {
+      const item = mockItems.find((i) => i.id === l.item_id);
+      if (item) {
+        item.stock_pieces = Math.max(0, item.stock_pieces - (l.pieces || 0));
+        item.stock_kg = Math.max(0, Math.round((item.stock_kg - (l.weight_kg || 0)) * 1000) / 1000);
+        mockStockMovements.unshift({
+          id: `sm_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+          item_id: item.id,
+          entry_at: new Date().toISOString(),
+          source_type: `Sale #${newSale.bill_no}`,
+          pieces_delta: -(l.pieces || 0),
+          kg_delta: -(l.weight_kg || 0),
+          reference: `Customer: ${party?.name || ''}`,
+        });
+      }
+    });
+
     return newSale;
   }
   return apiClient<Sale>('/sales', { method: 'POST', body: JSON.stringify(dto) });
@@ -241,6 +328,24 @@ export async function createPurchase(dto: any): Promise<Purchase> {
       lines: dto.lines,
     };
     mockPurchases.unshift(newP);
+
+    dto.lines.forEach((l: any) => {
+      const item = mockItems.find((i) => i.id === l.item_id);
+      if (item) {
+        item.stock_pieces += (l.pieces || 0);
+        item.stock_kg = Math.round((item.stock_kg + (l.weight_kg || 0)) * 1000) / 1000;
+        mockStockMovements.unshift({
+          id: `sm_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+          item_id: item.id,
+          entry_at: new Date().toISOString(),
+          source_type: `Purchase #${newP.bill_no}`,
+          pieces_delta: +(l.pieces || 0),
+          kg_delta: +(l.weight_kg || 0),
+          reference: `Supplier: ${party?.name || ''}`,
+        });
+      }
+    });
+
     return newP;
   }
   return apiClient<Purchase>('/purchases', { method: 'POST', body: JSON.stringify(dto) });
@@ -271,6 +376,22 @@ export async function createJobWork(dto: any): Promise<JobWorkEntry> {
       creator_name: 'Amit Verma',
     };
     mockJobWork.unshift(newJw);
+
+    if (item) {
+      const isIssue = dto.direction === 'ISSUE';
+      const weightDelta = isIssue ? -(dto.weight_kg || 0) : +(dto.weight_kg || 0);
+      item.stock_kg = Math.max(0, Math.round((item.stock_kg + weightDelta) * 1000) / 1000);
+      mockStockMovements.unshift({
+        id: `sm_${Date.now()}`,
+        item_id: item.id,
+        entry_at: new Date().toISOString(),
+        source_type: `${dto.work_type} ${dto.direction}`,
+        pieces_delta: 0,
+        kg_delta: weightDelta,
+        reference: `Artisan: ${party?.name || ''}`,
+      });
+    }
+
     return newJw;
   }
   return apiClient<JobWorkEntry>('/job-work', { method: 'POST', body: JSON.stringify(dto) });
@@ -308,7 +429,7 @@ export async function createVoucher(dto: any): Promise<MoneyVoucher> {
         const s = mockSales.find((sale) => sale.id === alloc.sale_id);
         if (s) {
           s.allocated_amount = (s.allocated_amount || 0) + alloc.amount;
-          s.outstanding_amount = Math.max(0, s.total_amount - s.allocated_amount);
+          s.outstanding_amount = Math.max(0, s.total_amount - (s.allocated_amount || 0));
           s.status = s.outstanding_amount === 0 ? 'PAID' : 'PARTIAL';
         }
       });

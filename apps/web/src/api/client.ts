@@ -380,6 +380,15 @@ export const api = {
       if (toDate) q.set('toDate', toDate);
       return fetchWithAuth<StockRegisterItem[]>(`/stock/register?${q.toString()}`);
     },
+    adjustStock: async (data: { item_id: string; pieces_delta: number; kg_delta: number; reason?: string }): Promise<any> => {
+      return fetchWithAuth('/stock/adjust', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+    },
+    getItemMovements: async (itemId: string): Promise<any> => {
+      return fetchWithAuth(`/stock/movements/${itemId}`);
+    },
   },
 
   // Owner Dashboard

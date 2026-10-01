@@ -8,6 +8,8 @@ import { DatabaseService } from '../database/database.service';
 export interface CreateItemDto {
   name: string;
   category?: string;
+  opening_pieces?: number;
+  opening_weight_kg?: number;
 }
 
 export interface UpdateItemDto {
@@ -67,7 +69,30 @@ export class ItemsService {
         `INSERT INTO items (name, category) VALUES ($1, $2) RETURNING *`,
         [dto.name.trim(), dto.category ? dto.category.trim() : null],
       );
-      return res.rows[0];
+      const item = res.rows[0];
+
+      const pieces = Number(dto.opening_pieces) || 0;
+      const weightKg = Number(dto.opening_weight_kg) || 0;
+
+      if (pieces > 0 || weightKg > 0) {
+        await this.db.query(
+          `INSERT INTO stock_movements (item_id, source_type, source_id, pieces_delta, kg_delta)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [
+            item.id,
+            'OPENING_STOCK',
+            item.id,
+            pieces,
+            weightKg,
+          ],
+        );
+      }
+
+      return {
+        ...item,
+        stock_pieces: pieces,
+        stock_kg: Math.round(weightKg * 1000) / 1000,
+      };
     } catch (err: any) {
       if (err.code === '23505') {
         throw new ConflictException(`Item with name '${dto.name}' already exists.`);

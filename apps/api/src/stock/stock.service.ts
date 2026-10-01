@@ -168,4 +168,42 @@ export class StockService {
       kg_delta: parseFloat(r.kg_delta),
     }));
   }
+
+  async adjustStock(dto: {
+    item_id: string;
+    pieces_delta: number;
+    kg_delta: number;
+    reason?: string;
+  }) {
+    const itemRes = await this.db.query(
+      `SELECT id, name, category, is_active FROM items WHERE id = $1`,
+      [dto.item_id],
+    );
+    if (itemRes.rows.length === 0) {
+      throw new NotFoundException('Item not found');
+    }
+
+    const piecesDelta = parseInt(String(dto.pieces_delta), 10) || 0;
+    const kgDelta = Math.round((parseFloat(String(dto.kg_delta)) || 0) * 1000) / 1000;
+
+    const res = await this.db.query(
+      `INSERT INTO stock_movements (item_id, source_type, source_id, pieces_delta, kg_delta)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
+      [
+        dto.item_id,
+        'STOCK_ADJUSTMENT',
+        dto.reason?.trim() || 'Manual Stock Adjustment',
+        piecesDelta,
+        kgDelta,
+      ],
+    );
+
+    return {
+      success: true,
+      movement: res.rows[0],
+      item: itemRes.rows[0],
+    };
+  }
 }
+
